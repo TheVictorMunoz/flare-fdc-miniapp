@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fdcVerificationAbi } from "@/lib/flare";
 import { publicClient, resolveContract, CONTRACT } from "@/lib/server";
-import { normalizeProof } from "@/lib/proof";
+import { decodeWeb2JsonProof, decodeAttestedData } from "@/lib/proof";
 
 export const runtime = "nodejs";
 
@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
 
   let proofArg;
   try {
-    proofArg = normalizeProof(body.proof);
+    proofArg = decodeWeb2JsonProof(body.proof);
   } catch (e: any) {
     return NextResponse.json(
       { error: e?.message ?? "Malformed proof." },
@@ -37,7 +37,8 @@ export async function POST(req: NextRequest) {
       functionName: "verifyWeb2Json",
       args: [proofArg as any],
     })) as boolean;
-    return NextResponse.json({ valid });
+    const attested = decodeAttestedData(proofArg.data);
+    return NextResponse.json({ valid, attested });
   } catch (e: any) {
     return NextResponse.json(
       { error: e?.message ?? "On-chain verification call failed." },

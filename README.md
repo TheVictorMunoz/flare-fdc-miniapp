@@ -63,15 +63,37 @@ app/
   api/prepare/        POST → verifier prepareRequest  (returns abiEncodedRequest)
   api/fee/            POST → FdcRequestFeeConfigurations.getRequestFee
   api/config/         GET  → resolved FDC contract addresses
-  api/proof/          POST → DA layer proof-by-request-round (polled)
+  api/proof/          POST → DA layer proof-by-request-round-raw (polled)
   api/verify/         POST → FdcVerification.verifyWeb2Json (on-chain read)
 lib/
   flare.ts            chain def, registry, ABIs, voting-round math, encoders
   server.ts           viem public client + registry address resolver
-  proof.ts            normalize DA response → verifier tuple
+  proof.ts            decode DA response_hex → verifier tuple + attested fields
 contracts/
   Web2JsonConsumer.sol  reference contract that trusts & stores attested data
+scripts/
+  selftest.mjs        live read/offchain check (no key needed)
+  e2e.mjs             full onchain round-trip (needs a funded key)
 ```
+
+## Verifying it actually works
+
+Two scripts prove the flow against **live Coston2**, not just a build:
+
+```bash
+# Read + offchain path — no wallet/key needed.
+# Resolves FDC contracts from the registry, calls the verifier, reads the fee.
+VERIFIER_API_KEY_TESTNET=<uuid> node scripts/selftest.mjs
+
+# Full round-trip — needs a funded Coston2 key (faucet above).
+# prepare -> submit -> wait for finalization -> fetch proof -> verifyWeb2Json.
+PRIVATE_KEY=0x... VERIFIER_API_KEY_TESTNET=<uuid> node scripts/e2e.mjs
+```
+
+`selftest.mjs` has been run and passes (registry resolution, verifier
+`status=VALID`, on-chain fee read). `e2e.mjs` performs the same submit → prove →
+verify sequence the browser UI does, so you can confirm the on-chain
+verification returns `true` end to end without clicking through MetaMask.
 
 ## The on-chain consumer
 

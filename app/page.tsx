@@ -24,9 +24,9 @@ const DEFAULT_REQUEST = {
   queryParams: "{}",
   body: "{}",
   postProcessJq:
-    '{name: .name, height: .height, mass: .mass, numberOfFilms: (.films | length), uid: (.url | split("/") | .[-2] | tonumber)}',
+    "{name: .name, height: .height, mass: .mass, numberOfFilms: .films | length, uid: (.url | split(\"/\") | .[-1] | tonumber)}",
   abiSignature:
-    '{"components":[{"internalType":"string","name":"name","type":"string"},{"internalType":"uint256","name":"height","type":"uint256"},{"internalType":"uint256","name":"mass","type":"uint256"},{"internalType":"uint256","name":"numberOfFilms","type":"uint256"},{"internalType":"uint256","name":"uid","type":"uint256"}],"name":"task","type":"tuple"}',
+    '{"components": [{"internalType": "string", "name": "name", "type": "string"},{"internalType": "uint256", "name": "height", "type": "uint256"},{"internalType": "uint256", "name": "mass", "type": "uint256"},{"internalType": "uint256", "name": "numberOfFilms", "type": "uint256"},{"internalType": "uint256", "name": "uid", "type": "uint256"}],"name": "task","type": "tuple"}',
 };
 
 type Req = typeof DEFAULT_REQUEST;
@@ -240,10 +240,7 @@ export default function Home() {
       if (!res.ok) throw new Error(json.error ?? "verify failed");
       setValid(json.valid);
       addLog(`On-chain verification returned: ${json.valid}`);
-
-      const resp = proof.response ?? proof.data ?? proof.attestation;
-      const rb = resp?.responseBody ?? resp?.response_body;
-      if (rb) setDecoded(rb);
+      if (json.attested) setDecoded(json.attested);
     } catch (e: any) {
       setError(e?.message ?? "verify failed");
     } finally {

@@ -1,25 +1,16 @@
-// Shapes returned by the Data Availability layer and the tuple the on-chain
-// verifier expects. The DA layer has used both camelCase and snake_case field
-// names across versions, so we read defensively.
+import { decodeAbiParameters } from "viem";
+import { web2JsonResponseComponents } from "@/lib/flare";
+
+// The DA layer's `proof-by-request-round-raw` endpoint returns:
+//   { response_hex: "0x...", proof: ["0x...", ...] }
+// `response_hex` is the ABI-encoded IWeb2Json.Response. We decode it against
+// the Response components and pair it with the Merkle path to form the
+// { merkleProof, data } tuple that FdcVerification.verifyWeb2Json expects.
+// This mirrors the canonical flare-hardhat-starter Web2Json flow.
 
 export interface Web2JsonProofArg {
   merkleProof: `0x${string}`[];
-  data: {
-    attestationType: `0x${string}`;
-    sourceId: `0x${string}`;
-    votingRound: bigint;
-    lowestUsedTimestamp: bigint;
-    requestBody: {
-      url: string;
-      httpMethod: string;
-      headers: string;
-      queryParams: string;
-      body: string;
-      postProcessJq: string;
-      abiSignature: string;
-    };
-    responseBody: { abiEncodedData: `0x${string}` };
-  };
+  data: unknown; // decoded Response tuple, passed straight to the verifier
 }
 
 function pick<T>(obj: any, ...keys: string[]): T | undefined {
@@ -29,66 +20,47 @@ function pick<T>(obj: any, ...keys: string[]): T | undefined {
   return undefined;
 }
 
-function toBigInt(v: unknown, fallback = 0n): bigint {
-  if (v === undefined || v === null) return fallback;
-  try {
-    return BigInt(v as any);
-  } catch {
-    return fallback;
-  }
-}
-
 /**
- * Normalize a DA-layer `proof-by-request-round` response into the argument
- * accepted by FdcVerification.verifyWeb2Json.
- * Throws if the proof/response are missing (round not finalized yet).
+ * Turn a raw DA-layer response into the verifier argument.
+ * Throws if the proof/response_hex are missing (round not finalized yet).
  */
-export function normalizeProof(daResponse: any): Web2JsonProofArg {
+export function decodeWeb2JsonProof(daResponse: any): Web2JsonProofArg {
   const proof = pick<string[]>(daResponse, "proof", "merkleProof");
-  const response = pick<any>(daResponse, "response", "data", "attestation");
-  if (!proof || !response) {
+  const responseHex = pick<`0x${string}`>(
+    daResponse,
+    "response_hex",
+    "responseHex"
+  );
+  if (!proof || !responseHex) {
     throw new Error("Proof not available yet (round may not be finalized).");
   }
 
-  const requestBody = pick<any>(response, "requestBody", "request_body") ?? {};
-  const responseBody = pick<any>(response, "responseBody", "response_body") ?? {};
+  const [data] = decodeAbiParameters(
+    [{ type: "tuple", components: web2JsonResponseComponents as any }],
+    responseHex
+  );
 
-  return {
-    merkleProof: proof as `0x${string}`[],
-    data: {
-      attestationType: pick<`0x${string}`>(
-        response,
-        "attestationType",
-        "attestation_type"
-      )!,
-      sourceId: pick<`0x${string}`>(response, "sourceId", "source_id")!,
-      votingRound: toBigInt(
-        pick(response, "votingRound", "voting_round")
-      ),
-      lowestUsedTimestamp: toBigInt(
-        pick(response, "lowestUsedTimestamp", "lowest_used_timestamp")
-      ),
-      requestBody: {
-        url: pick<string>(requestBody, "url") ?? "",
-        httpMethod:
-          pick<string>(requestBody, "httpMethod", "http_method") ?? "",
-        headers: pick<string>(requestBody, "headers") ?? "",
-        queryParams:
-          pick<string>(requestBody, "queryParams", "query_params") ?? "",
-        body: pick<string>(requestBody, "body") ?? "",
-        postProcessJq:
-          pick<string>(requestBody, "postProcessJq", "post_process_jq") ?? "",
-        abiSignature:
-          pick<string>(requestBody, "abiSignature", "abi_signature") ?? "",
-      },
-      responseBody: {
-        abiEncodedData:
-          pick<`0x${string}`>(
-            responseBody,
-            "abiEncodedData",
-            "abi_encoded_data"
-          ) ?? "0x",
-      },
-    },
-  };
+  return { merkleProof: proof as `0x${string}`[], data };
+}
+
+/**
+ * Decode the inner Web2Json payload (`responseBody.abiEncodedData`) using the
+ * request's own `abiSignature`, so the UI can show the attested fields.
+ */
+export function decodeAttestedData(data: any): Record<string, unknown> | null {
+  try {
+    const abiSignature: string = data?.requestBody?.abiSignature;
+    const abiEncodedData: `0x${string}` = data?.responseBody?.abiEncodedData;
+    if (!abiSignature || !abiEncodedData) return null;
+    const sig = JSON.parse(abiSignature); // a single tuple component
+    const decoded = decodeAbiParameters([sig], abiEncodedData);
+    const out: Record<string, unknown> = {};
+    (sig.components ?? []).forEach((c: any, i: number) => {
+      const v = (decoded[0] as any)[i] ?? (decoded[0] as any)[c.name];
+      out[c.name] = typeof v === "bigint" ? v.toString() : v;
+    });
+    return out;
+  } catch {
+    return null;
+  }
 }

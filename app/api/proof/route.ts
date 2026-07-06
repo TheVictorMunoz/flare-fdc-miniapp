@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
   }
 
   const url =
-    base.replace(/\/$/, "") + "/api/v1/fdc/proof-by-request-round";
+    base.replace(/\/$/, "") + "/api/v1/fdc/proof-by-request-round-raw";
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -65,7 +65,7 @@ export async function POST(req: NextRequest) {
   const hasProof =
     json &&
     (json.proof || json.merkleProof) &&
-    (json.response || json.data || json.attestation);
+    (json.response_hex || json.responseHex);
 
   if (daRes.status === 404 || !hasProof) {
     return NextResponse.json({ pending: true, details: json });

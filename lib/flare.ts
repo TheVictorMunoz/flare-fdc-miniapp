@@ -98,40 +98,43 @@ export const fdcHubAbi = [
 ] as const;
 
 /**
- * IWeb2Json.Proof as consumed by FdcVerification.verifyWeb2Json.
- * The tuple shape mirrors the Solidity struct in
- * @flarenetwork/flare-periphery-contracts/coston2/IWeb2Json.sol
+ * IWeb2Json.Response — the `data` field of the proof. The DA layer's
+ * `proof-by-request-round-raw` endpoint returns this ABI-encoded as
+ * `response_hex`, which we decode against exactly these components.
+ * Mirrors @flarenetwork/flare-periphery-contracts/coston2/IWeb2Json.sol.
+ */
+export const web2JsonResponseComponents = [
+  { name: "attestationType", type: "bytes32" },
+  { name: "sourceId", type: "bytes32" },
+  { name: "votingRound", type: "uint64" },
+  { name: "lowestUsedTimestamp", type: "uint64" },
+  {
+    name: "requestBody",
+    type: "tuple",
+    components: [
+      { name: "url", type: "string" },
+      { name: "httpMethod", type: "string" },
+      { name: "headers", type: "string" },
+      { name: "queryParams", type: "string" },
+      { name: "body", type: "string" },
+      { name: "postProcessJq", type: "string" },
+      { name: "abiSignature", type: "string" },
+    ],
+  },
+  {
+    name: "responseBody",
+    type: "tuple",
+    components: [{ name: "abiEncodedData", type: "bytes" }],
+  },
+] as const;
+
+/**
+ * IWeb2Json.Proof as consumed by FdcVerification.verifyWeb2Json:
+ * { bytes32[] merkleProof, Response data }.
  */
 export const web2JsonProofComponents = [
   { name: "merkleProof", type: "bytes32[]" },
-  {
-    name: "data",
-    type: "tuple",
-    components: [
-      { name: "attestationType", type: "bytes32" },
-      { name: "sourceId", type: "bytes32" },
-      { name: "votingRound", type: "uint64" },
-      { name: "lowestUsedTimestamp", type: "uint64" },
-      {
-        name: "requestBody",
-        type: "tuple",
-        components: [
-          { name: "url", type: "string" },
-          { name: "httpMethod", type: "string" },
-          { name: "headers", type: "string" },
-          { name: "queryParams", type: "string" },
-          { name: "body", type: "string" },
-          { name: "postProcessJq", type: "string" },
-          { name: "abiSignature", type: "string" },
-        ],
-      },
-      {
-        name: "responseBody",
-        type: "tuple",
-        components: [{ name: "abiEncodedData", type: "bytes" }],
-      },
-    ],
-  },
+  { name: "data", type: "tuple", components: web2JsonResponseComponents },
 ] as const;
 
 export const fdcVerificationAbi = [

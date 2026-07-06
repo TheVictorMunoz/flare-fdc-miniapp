@@ -26,3 +26,6 @@ yarn-error.log*
 
 # typescript
 *.tsbuildinfo
+
+# installed agent skills (restore with: npx skills experimental_install)
+/.agents

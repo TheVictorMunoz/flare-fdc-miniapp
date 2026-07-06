@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "flare-fdc": {
+      "source": "flare-foundation/flare-ai-skills",
+      "sourceType": "github",
+      "skillPath": "skills/flare-fdc-skill/SKILL.md",
+      "computedHash": "37e525d8e7436fbf1f207576088ed6000d2345dac4fa1a1d6e5ae9adb3347319"
+    }
+  }
+}
