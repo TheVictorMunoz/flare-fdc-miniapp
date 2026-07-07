@@ -195,23 +195,25 @@ export default function Home() {
     setBusy("proof");
     setProof(null);
     try {
-      const maxAttempts = 30; // ~5 min at 10s
+      const maxAttempts = 40; // ~7 min at 10s
+      // The DA layer indexes by exact round; try the computed round plus its
+      // immediate neighbours to stay robust to epoch-boundary rounding.
+      const candidates = [votingRoundId, votingRoundId - 1, votingRoundId + 1];
       for (let i = 0; i < maxAttempts; i++) {
-        addLog(`Polling DA layer for round ${votingRoundId} (attempt ${i + 1})…`);
-        const res = await fetch("/api/proof", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            votingRoundId,
-            requestBytes: abiEncodedRequest,
-          }),
-        });
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error ?? "proof fetch failed");
-        if (!json.pending) {
-          setProof(json.proof);
-          addLog("Proof retrieved from the Data Availability layer.");
-          return;
+        addLog(`Polling DA layer around round ${votingRoundId} (attempt ${i + 1})…`);
+        for (const round of candidates) {
+          const res = await fetch("/api/proof", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ votingRoundId: round, requestBytes: abiEncodedRequest }),
+          });
+          const json = await res.json();
+          if (!res.ok) throw new Error(json.error ?? "proof fetch failed");
+          if (!json.pending) {
+            setProof(json.proof);
+            addLog(`Proof retrieved from the Data Availability layer (round ${round}).`);
+            return;
+          }
         }
         await new Promise((r) => setTimeout(r, 10_000));
       }

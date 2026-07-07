@@ -21,7 +21,7 @@ const DA = (process.env.COSTON2_DA_LAYER_URL ?? "https://ctn2-data-availability.
 const API_KEY = process.env.VERIFIER_API_KEY_TESTNET ?? "00000000-0000-0000-0000-000000000000";
 const PK = process.env.PRIVATE_KEY;
 
-const FIRST_TS = 1658429955, DUR = 90;
+const FIRST_TS = 1658430000, DUR = 90; // authoritative FlareSystemsManager value
 const toB32 = (s) => "0x" + Buffer.from(s, "utf8").toString("hex").padEnd(64, "0");
 const ok = (m) => console.log("  \x1b[32m✓\x1b[0m " + m);
 const info = (m) => console.log("  · " + m);
@@ -85,21 +85,24 @@ async function main() {
   ok(`mined in block ${rcpt.blockNumber} · voting round ${round}`);
 
   console.log("\n[3] Poll DA layer for the proof");
-  let daJson = null;
-  for (let i = 0; i < 30; i++) {
+  let daJson = null, hitRound = null;
+  const candidates = [round, round - 1, round + 1]; // resilient to epoch-boundary rounding
+  for (let i = 0; i < 40 && !daJson; i++) {
     info(`attempt ${i + 1}…`);
-    const res = await fetch(`${DA}/api/v1/fdc/proof-by-request-round-raw`, {
-      method: "POST", headers: { "Content-Type": "application/json", "X-API-KEY": API_KEY },
-      body: JSON.stringify({ votingRoundId: round, requestBytes: abiEncodedRequest }),
-    });
-    if (res.ok) {
-      const j = await res.json();
-      if ((j.proof || j.merkleProof) && (j.response_hex || j.responseHex)) { daJson = j; break; }
+    for (const r of candidates) {
+      const res = await fetch(`${DA}/api/v1/fdc/proof-by-request-round-raw`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ votingRoundId: r, requestBytes: abiEncodedRequest }),
+      });
+      if (res.ok) {
+        const j = await res.json();
+        if ((j.proof || j.merkleProof) && (j.response_hex || j.responseHex)) { daJson = j; hitRound = r; break; }
+      }
     }
-    await sleep(10000);
+    if (!daJson) await sleep(10000);
   }
   if (!daJson) { console.error("Timed out waiting for finalization."); process.exit(1); }
-  ok(`proof retrieved (${daJson.proof.length} merkle nodes)`);
+  ok(`proof retrieved from round ${hitRound} (${daJson.proof.length} merkle nodes)`);
 
   console.log("\n[4] Verify on-chain: FdcVerification.verifyWeb2Json");
   const [data] = decodeAbiParameters([{ type: "tuple", components: RESP }], daJson.response_hex ?? daJson.responseHex);

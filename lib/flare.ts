@@ -35,8 +35,13 @@ export const CONTRACT_REGISTRY_ADDRESS =
  * FDC voting-round timing on Coston2. A round is 90s; round N finalizes a
  * few rounds after the request lands, which is why the app polls the DA layer.
  * votingRoundId = floor((blockTimestamp - firstVotingRoundStartTs) / duration)
+ *
+ * firstVotingRoundStartTs is the authoritative value from the
+ * FlareSystemsManager contract (verified on-chain). Note: the FDC
+ * getting-started doc lists 1658429955, which is 45s early and rounds the
+ * epoch up by one near boundaries — 1658430000 is correct.
  */
-export const FIRST_VOTING_ROUND_START_TS = 1658429955;
+export const FIRST_VOTING_ROUND_START_TS = 1658430000;
 export const VOTING_EPOCH_DURATION_SECONDS = 90;
 
 export function votingRoundIdFromTimestamp(timestampSeconds: number): number {
