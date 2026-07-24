@@ -107,8 +107,12 @@ if you want to try the full end-to-end write path.
 ## How the voting round is computed
 
 ```
-votingRoundId = floor((blockTimestamp - 1658429955) / 90)
+votingRoundId = floor((blockTimestamp - 1658430000) / 90)
 ```
+
+> `firstVotingRoundStartTs = 1658430000` is the authoritative value from the
+> FlareSystemsManager contract. The FDC getting-started doc lists `1658429955`,
+> which is 45s early and rounds the epoch up by one near round boundaries.
 
 The app reads the block your `requestAttestation` tx landed in and derives the
 round from its timestamp, then polls the DA layer for that round.

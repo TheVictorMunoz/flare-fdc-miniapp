@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createWalletClient,
   createPublicClient,
@@ -13,23 +13,8 @@ import {
   fdcHubAbi,
   votingRoundIdFromTimestamp,
 } from "@/lib/flare";
-
-// Canonical Web2Json example from the Flare dev hub: fetch a Star Wars
-// character and prove a few fields on-chain. Edit any field to attest your
-// own public API instead.
-const DEFAULT_REQUEST = {
-  url: "https://swapi.info/api/people/3",
-  httpMethod: "GET",
-  headers: "{}",
-  queryParams: "{}",
-  body: "{}",
-  postProcessJq:
-    "{name: .name, height: .height, mass: .mass, numberOfFilms: .films | length, uid: (.url | split(\"/\") | .[-1] | tonumber)}",
-  abiSignature:
-    '{"components": [{"internalType": "string", "name": "name", "type": "string"},{"internalType": "uint256", "name": "height", "type": "uint256"},{"internalType": "uint256", "name": "mass", "type": "uint256"},{"internalType": "uint256", "name": "numberOfFilms", "type": "uint256"},{"internalType": "uint256", "name": "uid", "type": "uint256"}],"name": "task","type": "tuple"}',
-};
-
-type Req = typeof DEFAULT_REQUEST;
+import { RECIPES, recipeById, type Web2Request } from "@/lib/recipes";
+import ProofCard from "@/components/ProofCard";
 
 declare global {
   interface Window {
@@ -37,23 +22,29 @@ declare global {
   }
 }
 
+const DEFAULT_RECIPE_ID = "btc";
+
 export default function Home() {
   const [account, setAccount] = useState<Address | null>(null);
-  const [req, setReq] = useState<Req>(DEFAULT_REQUEST);
-
-  const [abiEncodedRequest, setAbiEncodedRequest] = useState<string | null>(
-    null
+  const [recipeId, setRecipeId] = useState<string>(DEFAULT_RECIPE_ID);
+  const [req, setReq] = useState<Web2Request>(
+    () => recipeById(DEFAULT_RECIPE_ID)!.request
   );
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  const [abiEncodedRequest, setAbiEncodedRequest] = useState<string | null>(null);
   const [fee, setFee] = useState<string | null>(null);
   const [fdcHub, setFdcHub] = useState<Address | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
   const [votingRoundId, setVotingRoundId] = useState<number | null>(null);
   const [proof, setProof] = useState<any>(null);
-  const [decoded, setDecoded] = useState<any>(null);
+  const [decoded, setDecoded] = useState<Record<string, string> | null>(null);
   const [valid, setValid] = useState<boolean | null>(null);
 
+  const [autoRun, setAutoRun] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const [log, setLog] = useState<string[]>([]);
   const logRef = useRef<HTMLDivElement>(null);
 
@@ -64,10 +55,41 @@ export default function Home() {
     });
   }, []);
 
-  const setField = (k: keyof Req, v: string) =>
-    setReq((r) => ({ ...r, [k]: v }));
+  const recipe = recipeById(recipeId);
 
-  // ---- Step 1: connect wallet -------------------------------------------
+  const resetDownstream = useCallback(() => {
+    setAbiEncodedRequest(null);
+    setFee(null);
+    setFdcHub(null);
+    setTxHash(null);
+    setVotingRoundId(null);
+    setProof(null);
+    setDecoded(null);
+    setValid(null);
+    setAutoRun(false);
+    setError(null);
+    setCopied(false);
+  }, []);
+
+  const selectRecipe = useCallback(
+    (id: string) => {
+      const r = recipeById(id);
+      if (!r) return;
+      setRecipeId(id);
+      setReq(r.request);
+      setShowAdvanced(false);
+      resetDownstream();
+      setLog([]);
+    },
+    [resetDownstream]
+  );
+
+  const setField = (k: keyof Web2Request, v: string) => {
+    setReq((r) => ({ ...r, [k]: v }));
+    resetDownstream();
+  };
+
+  // ---- connect wallet ----------------------------------------------------
   const connect = useCallback(async () => {
     setError(null);
     if (!window.ethereum) {
@@ -108,7 +130,7 @@ export default function Home() {
     }
   }, [addLog]);
 
-  // ---- Step 2: prepare request + read fee -------------------------------
+  // ---- step 1: prepare ---------------------------------------------------
   const prepare = useCallback(async () => {
     setError(null);
     setBusy("prepare");
@@ -149,7 +171,43 @@ export default function Home() {
     }
   }, [req, addLog]);
 
-  // ---- Step 3: submit on-chain ------------------------------------------
+  // ---- step 3: poll DA layer --------------------------------------------
+  const fetchProof = useCallback(async () => {
+    if (votingRoundId === null || !abiEncodedRequest) return;
+    setError(null);
+    setBusy("proof");
+    setProof(null);
+    try {
+      const maxAttempts = 40; // ~7 min at 10s
+      const candidates = [votingRoundId, votingRoundId - 1, votingRoundId + 1];
+      for (let i = 0; i < maxAttempts; i++) {
+        addLog(`Polling DA layer around round ${votingRoundId} (attempt ${i + 1})…`);
+        for (const round of candidates) {
+          const res = await fetch("/api/proof", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ votingRoundId: round, requestBytes: abiEncodedRequest }),
+          });
+          const json = await res.json();
+          if (!res.ok) throw new Error(json.error ?? "proof fetch failed");
+          if (!json.pending) {
+            setProof(json.proof);
+            addLog(`Proof retrieved from the Data Availability layer (round ${round}).`);
+            return;
+          }
+        }
+        await new Promise((r) => setTimeout(r, 10_000));
+      }
+      throw new Error("Timed out waiting for round finalization. Try Fetch proof again.");
+    } catch (e: any) {
+      setAutoRun(false);
+      setError(e?.message ?? "proof fetch failed");
+    } finally {
+      setBusy(null);
+    }
+  }, [votingRoundId, abiEncodedRequest, addLog]);
+
+  // ---- step 2: submit on-chain ------------------------------------------
   const submit = useCallback(async () => {
     if (!account || !abiEncodedRequest || fee === null || !fdcHub) return;
     setError(null);
@@ -180,6 +238,7 @@ export default function Home() {
       const block = await pub.getBlock({ blockNumber: receipt.blockNumber });
       const round = votingRoundIdFromTimestamp(Number(block.timestamp));
       setVotingRoundId(round);
+      setAutoRun(true); // hand off to auto proof + verify
       addLog(`Included in block ${receipt.blockNumber} · voting round ${round}`);
     } catch (e: any) {
       setError(e?.shortMessage ?? e?.message ?? "submit failed");
@@ -188,44 +247,7 @@ export default function Home() {
     }
   }, [account, abiEncodedRequest, fee, fdcHub, addLog]);
 
-  // ---- Step 4: poll DA layer for the proof ------------------------------
-  const fetchProof = useCallback(async () => {
-    if (votingRoundId === null || !abiEncodedRequest) return;
-    setError(null);
-    setBusy("proof");
-    setProof(null);
-    try {
-      const maxAttempts = 40; // ~7 min at 10s
-      // The DA layer indexes by exact round; try the computed round plus its
-      // immediate neighbours to stay robust to epoch-boundary rounding.
-      const candidates = [votingRoundId, votingRoundId - 1, votingRoundId + 1];
-      for (let i = 0; i < maxAttempts; i++) {
-        addLog(`Polling DA layer around round ${votingRoundId} (attempt ${i + 1})…`);
-        for (const round of candidates) {
-          const res = await fetch("/api/proof", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ votingRoundId: round, requestBytes: abiEncodedRequest }),
-          });
-          const json = await res.json();
-          if (!res.ok) throw new Error(json.error ?? "proof fetch failed");
-          if (!json.pending) {
-            setProof(json.proof);
-            addLog(`Proof retrieved from the Data Availability layer (round ${round}).`);
-            return;
-          }
-        }
-        await new Promise((r) => setTimeout(r, 10_000));
-      }
-      throw new Error("Timed out waiting for round finalization. Try again.");
-    } catch (e: any) {
-      setError(e?.message ?? "proof fetch failed");
-    } finally {
-      setBusy(null);
-    }
-  }, [votingRoundId, abiEncodedRequest, addLog]);
-
-  // ---- Step 5: verify on-chain ------------------------------------------
+  // ---- step 4: verify on-chain ------------------------------------------
   const verify = useCallback(async () => {
     if (!proof) return;
     setError(null);
@@ -241,210 +263,339 @@ export default function Home() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "verify failed");
       setValid(json.valid);
+      setAutoRun(false);
       addLog(`On-chain verification returned: ${json.valid}`);
       if (json.attested) setDecoded(json.attested);
     } catch (e: any) {
+      setAutoRun(false);
       setError(e?.message ?? "verify failed");
     } finally {
       setBusy(null);
     }
   }, [proof, addLog]);
 
+  // ---- auto-chain: after submit, fetch proof, then verify ----------------
+  useEffect(() => {
+    if (autoRun && votingRoundId !== null && abiEncodedRequest && !proof && busy === null) {
+      fetchProof();
+    }
+  }, [autoRun, votingRoundId, abiEncodedRequest, proof, busy, fetchProof]);
+
+  useEffect(() => {
+    if (autoRun && proof && valid === null && busy === null) {
+      verify();
+    }
+  }, [autoRun, proof, valid, busy, verify]);
+
+  // ---- share -------------------------------------------------------------
+  const shareUrl = useMemo(() => {
+    if (valid !== true || !abiEncodedRequest || votingRoundId === null) return null;
+    if (typeof window === "undefined") return null;
+    const p = new URLSearchParams({
+      r: abiEncodedRequest,
+      round: String(votingRoundId),
+      recipe: recipeId,
+    });
+    if (txHash) p.set("tx", txHash);
+    return `${window.location.origin}/proof?${p.toString()}`;
+  }, [valid, abiEncodedRequest, votingRoundId, recipeId, txHash]);
+
+  const doShare = useCallback(() => {
+    if (!shareUrl) return;
+    navigator.clipboard?.writeText(shareUrl).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2200);
+    });
+  }, [shareUrl]);
+
   const shortAddr = useMemo(
     () => (account ? `${account.slice(0, 6)}…${account.slice(-4)}` : null),
     [account]
   );
+  const explorerBase = coston2.blockExplorers!.default.url;
 
-  const explorerTx = txHash
-    ? `${coston2.blockExplorers!.default.url}/tx/${txHash}`
-    : null;
+  // progress state per step
+  const s1 = abiEncodedRequest ? "done" : busy === "prepare" ? "active" : "idle";
+  const s2 = txHash ? "done" : busy === "submit" ? "active" : abiEncodedRequest ? "ready" : "idle";
+  const s3 = proof ? "done" : busy === "proof" ? "active" : txHash ? "ready" : "idle";
+  const s4 =
+    valid === true ? "done" : busy === "verify" ? "active" : proof ? "ready" : "idle";
 
   return (
     <div className="wrap">
+      <div className="bg-orbs" aria-hidden>
+        <span />
+        <span />
+      </div>
+
       <header className="hero">
-        <span className="pill">Flare Data Connector · Coston2</span>
-        <h1>Prove Web2 data on-chain</h1>
+        <span className="pill">Flare Data Connector · Coston2 testnet</span>
+        <h1>
+          Prove <span className="grad">anything</span> on-chain.
+        </h1>
         <p>
-          Run the full FDC <strong>Web2Json</strong> attestation lifecycle from
-          your browser: encode a request, submit it on-chain, wait for the
-          voting round to finalize, fetch the Merkle proof, and verify it
-          against the on-chain Merkle root — all on the Coston2 testnet.
+          Pick a real-world fact from a public API, and Flare&apos;s decentralized
+          validators attest it. You get a <strong>tamper-proof, on-chain-verified
+          proof</strong> — with a link anyone can re-verify against Flare, live.
         </p>
       </header>
 
       <div className="wallet-bar">
-        <div>
+        <span className="addr">
           {account ? (
-            <span className="addr">Connected · {shortAddr}</span>
+            <>
+              <span className="live-dot" /> Connected · {shortAddr}
+            </>
           ) : (
-            <span className="addr">Wallet not connected</span>
+            "Wallet not connected"
           )}
-        </div>
-        {!account && <button onClick={connect}>Connect wallet</button>}
+        </span>
+        {!account && (
+          <button className="btn" onClick={connect}>
+            Connect wallet
+          </button>
+        )}
       </div>
 
-      {error && (
-        <div className="step">
-          <div className="status err">⚠ {error}</div>
-        </div>
-      )}
-
-      {/* Step 1 */}
-      <section className="step">
-        <div className="step-head">
-          <div className={`step-num ${abiEncodedRequest ? "done" : ""}`}>1</div>
-          <h2>Configure the Web2 request</h2>
-        </div>
-        <p className="hint">
-          Any public JSON API. <code>postProcessJq</code> shapes the response;
-          <code> abiSignature</code> declares the Solidity struct it decodes to.
-        </p>
-        <label>URL</label>
-        <input
-          value={req.url}
-          onChange={(e) => setField("url", e.target.value)}
-        />
-        <div className="grid-2">
-          <div>
-            <label>HTTP method</label>
-            <input
-              value={req.httpMethod}
-              onChange={(e) => setField("httpMethod", e.target.value)}
-            />
-          </div>
-          <div>
-            <label>Query params (JSON)</label>
-            <input
-              value={req.queryParams}
-              onChange={(e) => setField("queryParams", e.target.value)}
-            />
-          </div>
-        </div>
-        <label>postProcessJq</label>
-        <textarea
-          value={req.postProcessJq}
-          onChange={(e) => setField("postProcessJq", e.target.value)}
-        />
-        <label>abiSignature</label>
-        <textarea
-          value={req.abiSignature}
-          onChange={(e) => setField("abiSignature", e.target.value)}
-        />
-        <div className="row">
-          <button onClick={prepare} disabled={busy !== null}>
-            {busy === "prepare" ? <span className="spin" /> : null}
-            Prepare request
+      {/* Recipe gallery */}
+      <section className="panel">
+        <div className="panel-head">
+          <h2>1 · Choose a fact to prove</h2>
+          <button className="linkbtn" onClick={() => setShowAdvanced((s) => !s)}>
+            {showAdvanced ? "Hide raw request" : "Advanced / custom API"}
           </button>
         </div>
-        {abiEncodedRequest && (
-          <>
-            <div className="code">{abiEncodedRequest}</div>
+        <div className="recipe-grid">
+          {RECIPES.map((r) => (
+            <button
+              key={r.id}
+              className={`recipe ${recipeId === r.id ? "sel" : ""}`}
+              onClick={() => selectRecipe(r.id)}
+            >
+              <span className="recipe-emoji">{r.emoji}</span>
+              <span className="recipe-body">
+                <span className="recipe-title">{r.title}</span>
+                <span className="recipe-sub">{r.subtitle}</span>
+              </span>
+              <span className="recipe-cat">{r.category}</span>
+            </button>
+          ))}
+        </div>
+
+        {showAdvanced && (
+          <div className="advanced">
+            <p className="hint">
+              Edit any field to attest your own public JSON API. <code>postProcessJq</code>{" "}
+              shapes the response; <code>abiSignature</code> declares the Solidity struct it
+              decodes to.
+            </p>
+            <label>URL</label>
+            <input value={req.url} onChange={(e) => setField("url", e.target.value)} />
+            <div className="grid-2">
+              <div>
+                <label>HTTP method</label>
+                <input
+                  value={req.httpMethod}
+                  onChange={(e) => setField("httpMethod", e.target.value)}
+                />
+              </div>
+              <div>
+                <label>Query params (JSON)</label>
+                <input
+                  value={req.queryParams}
+                  onChange={(e) => setField("queryParams", e.target.value)}
+                />
+              </div>
+            </div>
+            <label>postProcessJq</label>
+            <textarea
+              value={req.postProcessJq}
+              onChange={(e) => setField("postProcessJq", e.target.value)}
+            />
+            <label>abiSignature</label>
+            <textarea
+              value={req.abiSignature}
+              onChange={(e) => setField("abiSignature", e.target.value)}
+            />
+          </div>
+        )}
+      </section>
+
+      {error && <div className="alert err">⚠ {error}</div>}
+
+      {/* Flow */}
+      <section className="panel">
+        <div className="panel-head">
+          <h2>2 · Create the proof</h2>
+          <span className="src-tag">
+            source: {recipe?.sourceName ?? "custom API"}
+          </span>
+        </div>
+
+        <div className="stepper">
+          <Step
+            n={1}
+            state={s1}
+            title="Prepare"
+            desc="Encode the request at Flare's verifier and read the on-chain fee."
+          >
+            <button className="btn" onClick={prepare} disabled={busy !== null}>
+              {busy === "prepare" && <span className="spin" />} Prepare request
+            </button>
             {fee !== null && (
-              <div className="status ok">
-                Fee: {fee} wei · FdcHub resolved from registry
+              <div className="mini ok">Fee {fee} wei · FdcHub resolved from registry</div>
+            )}
+          </Step>
+
+          <Step
+            n={2}
+            state={s2}
+            title="Submit"
+            desc="Your wallet calls FdcHub.requestAttestation. Then it runs itself."
+          >
+            <button
+              className="btn"
+              onClick={submit}
+              disabled={busy !== null || !account || !abiEncodedRequest}
+            >
+              {busy === "submit" && <span className="spin" />}
+              {account ? "Submit on-chain" : "Connect wallet first"}
+            </button>
+            {txHash && (
+              <div className="mini ok">
+                Submitted · round #{votingRoundId} ·{" "}
+                <a href={`${explorerBase}/tx/${txHash}`} target="_blank" rel="noreferrer">
+                  view tx
+                </a>
               </div>
             )}
+          </Step>
+
+          <Step
+            n={3}
+            state={s3}
+            title="Finalize & fetch proof"
+            desc="Validators finalize the round (~90s each); the Merkle proof is pulled from the DA layer."
+          >
+            <button className="btn ghost" onClick={fetchProof} disabled={busy !== null || votingRoundId === null}>
+              {busy === "proof" && <span className="spin" />} Fetch proof
+            </button>
+            {busy === "proof" && (
+              <div className="mini">Waiting for round finalization…</div>
+            )}
+          </Step>
+
+          <Step
+            n={4}
+            state={s4}
+            title="Verify on-chain"
+            desc="FdcVerification.verifyWeb2Json checks the proof against the root the validators committed."
+            last
+          >
+            <button className="btn ghost" onClick={verify} disabled={busy !== null || !proof}>
+              {busy === "verify" && <span className="spin" />} Verify proof
+            </button>
+          </Step>
+        </div>
+      </section>
+
+      {/* Result */}
+      {(valid !== null || busy === "verify") && (
+        <section className="panel result">
+          <div className="panel-head">
+            <h2>3 · Your proof</h2>
+          </div>
+          <ProofCard
+            recipeId={recipeId}
+            sourceName={recipe?.sourceName}
+            sourceUrl={req.url}
+            attested={decoded}
+            txHash={txHash}
+            votingRoundId={votingRoundId}
+            valid={valid}
+            verifying={busy === "verify"}
+            explorerBase={explorerBase}
+            shareUrl={shareUrl}
+            onShare={doShare}
+            copied={copied}
+          />
+          {valid === true && (
+            <p className="share-hint">
+              Anyone who opens your share link re-runs the on-chain verification themselves —
+              the proof stands on its own, no trust in this app required.
+            </p>
+          )}
+        </section>
+      )}
+
+      {/* Developer details */}
+      <details className="devbox">
+        <summary>Developer details</summary>
+        {abiEncodedRequest && (
+          <>
+            <div className="dev-label">abiEncodedRequest</div>
+            <div className="code">{abiEncodedRequest}</div>
           </>
         )}
-      </section>
-
-      {/* Step 2 */}
-      <section
-        className={`step ${
-          abiEncodedRequest && account ? "" : "disabled"
-        }`}
-      >
-        <div className="step-head">
-          <div className={`step-num ${txHash ? "done" : ""}`}>2</div>
-          <h2>Submit the attestation on-chain</h2>
-        </div>
-        <p className="hint">
-          Calls <code>FdcHub.requestAttestation</code> with the encoded request
-          and the required fee. Confirm the transaction in your wallet.
-        </p>
-        <div className="row">
-          <button onClick={submit} disabled={busy !== null || !account}>
-            {busy === "submit" ? <span className="spin" /> : null}
-            Submit request
-          </button>
-        </div>
-        {txHash && (
-          <div className="status ok">
-            Submitted in voting round <strong>{votingRoundId}</strong> ·{" "}
-            <a href={explorerTx!} target="_blank" rel="noreferrer">
-              view tx
-            </a>
-          </div>
-        )}
-      </section>
-
-      {/* Step 3 */}
-      <section className={`step ${votingRoundId !== null ? "" : "disabled"}`}>
-        <div className="step-head">
-          <div className={`step-num ${proof ? "done" : ""}`}>3</div>
-          <h2>Fetch the Merkle proof</h2>
-        </div>
-        <p className="hint">
-          The voting round finalizes a few rounds (~90s each) after submission.
-          This polls the Data Availability layer until the proof is ready.
-        </p>
-        <div className="row">
-          <button onClick={fetchProof} disabled={busy !== null}>
-            {busy === "proof" ? <span className="spin" /> : null}
-            Fetch proof
-          </button>
-        </div>
         {proof && (
-          <div className="code">{JSON.stringify(proof, null, 2)}</div>
+          <>
+            <div className="dev-label">DA-layer proof</div>
+            <div className="code">{JSON.stringify(proof, null, 2)}</div>
+          </>
         )}
-      </section>
-
-      {/* Step 4 */}
-      <section className={`step ${proof ? "" : "disabled"}`}>
-        <div className="step-head">
-          <div className={`step-num ${valid === true ? "done" : ""}`}>4</div>
-          <h2>Verify on-chain</h2>
-        </div>
-        <p className="hint">
-          Calls <code>FdcVerification.verifyWeb2Json</code>, which checks the
-          Merkle proof against the root stored on-chain by the validators.
-        </p>
-        <div className="row">
-          <button onClick={verify} disabled={busy !== null}>
-            {busy === "verify" ? <span className="spin" /> : null}
-            Verify proof
-          </button>
-          {valid === true && <span className="badge ok">✓ Verified on-chain</span>}
-          {valid === false && (
-            <span className="badge err">✗ Not valid</span>
-          )}
-        </div>
         {decoded && (
-          <div className="code">
-            {JSON.stringify(decoded, null, 2)}
-          </div>
+          <>
+            <div className="dev-label">Decoded attested data</div>
+            <div className="code">{JSON.stringify(decoded, null, 2)}</div>
+          </>
         )}
-      </section>
-
-      <div className="log" ref={logRef}>
-        {log.length === 0 ? (
-          <div>— activity log —</div>
-        ) : (
-          log.map((l, i) => <div key={i}>{l}</div>)
-        )}
-      </div>
+        <div className="dev-label">Activity log</div>
+        <div className="log" ref={logRef}>
+          {log.length === 0 ? <div>— activity log —</div> : log.map((l, i) => <div key={i}>{l}</div>)}
+        </div>
+      </details>
 
       <footer>
         Built on the{" "}
         <a href="https://dev.flare.network/fdc/overview" target="_blank" rel="noreferrer">
           Flare Data Connector
         </a>
-        . Need test C2FLR? Use the{" "}
+        . Need test C2FLR? Grab some from the{" "}
         <a href="https://faucet.flare.network/coston2" target="_blank" rel="noreferrer">
           Coston2 faucet
         </a>
         .
       </footer>
+    </div>
+  );
+}
+
+function Step({
+  n,
+  state,
+  title,
+  desc,
+  children,
+  last,
+}: {
+  n: number;
+  state: string;
+  title: string;
+  desc: string;
+  children: React.ReactNode;
+  last?: boolean;
+}) {
+  return (
+    <div className={`step2 ${state} ${last ? "last" : ""}`}>
+      <div className="step2-rail">
+        <div className="step2-node">{state === "done" ? "✓" : n}</div>
+        {!last && <div className="step2-line" />}
+      </div>
+      <div className="step2-body">
+        <div className="step2-title">{title}</div>
+        <div className="step2-desc">{desc}</div>
+        <div className="step2-action">{children}</div>
+      </div>
     </div>
   );
 }

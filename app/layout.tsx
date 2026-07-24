@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Flare FDC Miniapp — Web2Json attestation",
+  title: "Proof of Anything — Flare Data Connector",
   description:
-    "Prove Web2 API data on-chain with the Flare Data Connector (Coston2).",
+    "Turn any real-world web fact into a tamper-proof, on-chain-verified proof with a shareable link that re-verifies itself against Flare. Powered by the Flare Data Connector (Coston2).",
 };
 
 export default function RootLayout({
