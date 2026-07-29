@@ -13,7 +13,20 @@ import {
   fdcHubAbi,
   votingRoundIdFromTimestamp,
 } from "@/lib/flare";
-import { RECIPES, recipeById, type Web2Request } from "@/lib/recipes";
+import {
+  CUSTOM_RECIPE,
+  CUSTOM_REQUEST,
+  RECIPES,
+  recipeById,
+  type Web2Request,
+} from "@/lib/recipes";
+import {
+  validateAbiSignature,
+  validateJsonField,
+  validatePostProcessJq,
+  validateUrl,
+} from "@/lib/validate";
+import { parseCurl } from "@/lib/parseCurl";
 import ProofCard from "@/components/ProofCard";
 
 declare global {
@@ -45,6 +58,8 @@ export default function Home() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [curlPaste, setCurlPaste] = useState("");
+  const [curlError, setCurlError] = useState<string | null>(null);
   const [log, setLog] = useState<string[]>([]);
   const logRef = useRef<HTMLDivElement>(null);
 
@@ -56,6 +71,36 @@ export default function Home() {
   }, []);
 
   const recipe = recipeById(recipeId);
+  const isCustom = recipeId === CUSTOM_RECIPE.id;
+  const showEditor = showAdvanced || isCustom;
+  const urlError = useMemo(() => validateUrl(req.url), [req.url]);
+  const headersError = useMemo(
+    () => validateJsonField("Headers", req.headers),
+    [req.headers]
+  );
+  const queryError = useMemo(
+    () => validateJsonField("Query params", req.queryParams),
+    [req.queryParams]
+  );
+  const bodyError = useMemo(
+    () => validateJsonField("Body", req.body),
+    [req.body]
+  );
+  const jqError = useMemo(
+    () => validatePostProcessJq(req.postProcessJq),
+    [req.postProcessJq]
+  );
+  const abiError = useMemo(
+    () => validateAbiSignature(req.abiSignature),
+    [req.abiSignature]
+  );
+  const requestInvalid =
+    !!urlError ||
+    !!headersError ||
+    !!queryError ||
+    !!bodyError ||
+    !!jqError ||
+    !!abiError;
 
   const resetDownstream = useCallback(() => {
     setAbiEncodedRequest(null);
@@ -76,8 +121,8 @@ export default function Home() {
       const r = recipeById(id);
       if (!r) return;
       setRecipeId(id);
-      setReq(r.request);
-      setShowAdvanced(false);
+      setReq({ ...r.request });
+      setShowAdvanced(id === CUSTOM_RECIPE.id);
       resetDownstream();
       setLog([]);
     },
@@ -87,6 +132,78 @@ export default function Home() {
   const setField = (k: keyof Web2Request, v: string) => {
     setReq((r) => ({ ...r, [k]: v }));
     resetDownstream();
+  };
+
+  const applyCurl = async () => {
+    setCurlError(null);
+    let parsed;
+    try {
+      parsed = parseCurl(curlPaste);
+    } catch (e: any) {
+      setCurlError(e?.message || String(e));
+      return;
+    }
+
+    setBusy("curl");
+    try {
+      let postProcessJq = CUSTOM_REQUEST.postProcessJq;
+      let abiSignature = CUSTOM_REQUEST.abiSignature;
+
+      const probeRes = await fetch("/api/probe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: parsed.url,
+          httpMethod: parsed.httpMethod,
+          headers: parsed.headers,
+          queryParams: parsed.queryParams,
+          body: parsed.body,
+        }),
+      });
+      const probeJson = await probeRes.json();
+      if (probeRes.ok && probeJson.postProcessJq && probeJson.abiSignature) {
+        postProcessJq = probeJson.postProcessJq;
+        abiSignature = probeJson.abiSignature;
+      } else if (!probeRes.ok) {
+        // Still fill HTTP fields; jq/abi fall back to custom starters.
+        setCurlError(
+          `Filled request fields, but could not infer jq/ABI: ${
+            probeJson.error || `HTTP ${probeRes.status}`
+          }. Using starter postProcessJq / abiSignature — edit them to match your API.`
+        );
+      }
+
+      setReq((r) => ({
+        ...r,
+        url: parsed.url,
+        httpMethod: parsed.httpMethod,
+        headers: parsed.headers,
+        queryParams: parsed.queryParams,
+        body: parsed.body,
+        postProcessJq,
+        abiSignature,
+      }));
+      setCurlPaste("");
+      resetDownstream();
+    } catch (e: any) {
+      setReq((r) => ({
+        ...r,
+        url: parsed.url,
+        httpMethod: parsed.httpMethod,
+        headers: parsed.headers,
+        queryParams: parsed.queryParams,
+        body: parsed.body,
+        postProcessJq: CUSTOM_REQUEST.postProcessJq,
+        abiSignature: CUSTOM_REQUEST.abiSignature,
+      }));
+      setCurlPaste("");
+      resetDownstream();
+      setCurlError(
+        `Filled request fields, but probe failed: ${e?.message || e}. Using starter postProcessJq / abiSignature.`
+      );
+    } finally {
+      setBusy(null);
+    }
   };
 
   // ---- connect wallet ----------------------------------------------------
@@ -133,6 +250,17 @@ export default function Home() {
   // ---- step 1: prepare ---------------------------------------------------
   const prepare = useCallback(async () => {
     setError(null);
+    const urlErr = validateUrl(req.url);
+    const headersErr = validateJsonField("Headers", req.headers);
+    const queryErr = validateJsonField("Query params", req.queryParams);
+    const bodyErr = validateJsonField("Body", req.body);
+    const jqErr = validatePostProcessJq(req.postProcessJq);
+    const abiErr = validateAbiSignature(req.abiSignature);
+    if (urlErr || headersErr || queryErr || bodyErr || jqErr || abiErr) {
+      setError(urlErr ?? headersErr ?? queryErr ?? bodyErr ?? jqErr ?? abiErr);
+      setShowAdvanced(true);
+      return;
+    }
     setBusy("prepare");
     setAbiEncodedRequest(null);
     setFee(null);
@@ -361,10 +489,13 @@ export default function Home() {
       <section className="panel">
         <div className="panel-head">
           <h2>1 · Choose a fact to prove</h2>
-          <button className="linkbtn" onClick={() => setShowAdvanced((s) => !s)}>
-            {showAdvanced ? "Hide raw request" : "Advanced / custom API"}
-          </button>
+          {!isCustom && (
+            <button className="linkbtn" onClick={() => setShowAdvanced((s) => !s)}>
+              {showAdvanced ? "Hide raw request" : "Advanced / custom API"}
+            </button>
+          )}
         </div>
+
         <div className="recipe-grid">
           {RECIPES.map((r) => (
             <button
@@ -380,43 +511,144 @@ export default function Home() {
               <span className="recipe-cat">{r.category}</span>
             </button>
           ))}
+          <button
+            className={`recipe custom ${isCustom ? "sel" : ""}`}
+            onClick={() => selectRecipe(CUSTOM_RECIPE.id)}
+          >
+            <span className="recipe-emoji">{CUSTOM_RECIPE.emoji}</span>
+            <span className="recipe-body">
+              <span className="recipe-title">{CUSTOM_RECIPE.title}</span>
+              <span className="recipe-sub">{CUSTOM_RECIPE.subtitle}</span>
+            </span>
+            <span className="recipe-cat">{CUSTOM_RECIPE.category}</span>
+          </button>
         </div>
 
-        {showAdvanced && (
+        {showEditor && (
           <div className="advanced">
+            <div className="curl-import">
+              <label>Paste cURL</label>
+              <p className="hint">
+                Paste a DevTools or browser <code>curl</code> to fill URL, method,
+                headers, query params, and body. We then fetch the URL and infer{" "}
+                <code>postProcessJq</code> + <code>abiSignature</code> from the JSON
+                response — tweak them if needed.
+              </p>
+              <textarea
+                className={`curl-paste${curlError ? " invalid" : ""}`}
+                value={curlPaste}
+                onChange={(e) => {
+                  setCurlPaste(e.target.value);
+                  if (curlError) setCurlError(null);
+                }}
+                placeholder={`curl 'https://api.example.com/data?key=value' \\\n  -H 'Accept: application/json'`}
+                spellCheck={false}
+              />
+              {curlError && <p className="field-error">{curlError}</p>}
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={applyCurl}
+                disabled={!curlPaste.trim() || busy !== null}
+              >
+                {busy === "curl" && <span className="spin" />} Fill from cURL
+              </button>
+            </div>
+
             <p className="hint">
-              Edit any field to attest your own public JSON API. <code>postProcessJq</code>{" "}
-              shapes the response; <code>abiSignature</code> declares the Solidity struct it
-              decodes to.
+              {isCustom
+                ? "Point Flare at any public HTTPS JSON API. The verifier fetches the raw JSON from "
+                : "Edit any field to attest your own public JSON API. The verifier first fetches the raw JSON from "}
+              <code>url</code>, then runs <code>postProcessJq</code> on that JSON, then
+              ABI-encodes the result using <code>abiSignature</code>.
+            </p>
+            <p className="hint">
+              Think of <code>postProcessJq</code> as a small mapping step: raw API response in,
+              clean object out. The object keys and value types it returns must line up with{" "}
+              <code>abiSignature</code> field-for-field.
             </p>
             <label>URL</label>
-            <input value={req.url} onChange={(e) => setField("url", e.target.value)} />
-            <div className="grid-2">
-              <div>
-                <label>HTTP method</label>
-                <input
-                  value={req.httpMethod}
-                  onChange={(e) => setField("httpMethod", e.target.value)}
-                />
-              </div>
-              <div>
-                <label>Query params (JSON)</label>
-                <input
-                  value={req.queryParams}
-                  onChange={(e) => setField("queryParams", e.target.value)}
-                />
-              </div>
-            </div>
-            <label>postProcessJq</label>
+            <input
+              className={urlError ? "invalid" : undefined}
+              value={req.url}
+              onChange={(e) => setField("url", e.target.value)}
+              aria-invalid={!!urlError}
+              placeholder="https://api.example.com/data"
+              spellCheck={false}
+            />
+            {urlError && <p className="field-error">{urlError}</p>}
+            <label>HTTP method</label>
+            <select
+              value={req.httpMethod}
+              onChange={(e) => setField("httpMethod", e.target.value)}
+            >
+              <option value="GET">GET</option>
+              <option value="POST">POST</option>
+              <option value="PUT">PUT</option>
+              <option value="PATCH">PATCH</option>
+              <option value="DELETE">DELETE</option>
+            </select>
+            <label>Headers (JSON)</label>
             <textarea
+              className={headersError ? "invalid" : undefined}
+              value={req.headers}
+              onChange={(e) => setField("headers", e.target.value)}
+              aria-invalid={!!headersError}
+              placeholder='{"Accept":"application/json"}'
+              spellCheck={false}
+            />
+            {headersError && <p className="field-error">{headersError}</p>}
+            <label>Query params (JSON)</label>
+            <textarea
+              className={queryError ? "invalid" : undefined}
+              value={req.queryParams}
+              onChange={(e) => setField("queryParams", e.target.value)}
+              aria-invalid={!!queryError}
+              placeholder='{"key":"value"}'
+              spellCheck={false}
+            />
+            {queryError && <p className="field-error">{queryError}</p>}
+            <label>Body (JSON)</label>
+            <textarea
+              className={bodyError ? "invalid" : undefined}
+              value={req.body}
+              onChange={(e) => setField("body", e.target.value)}
+              aria-invalid={!!bodyError}
+              placeholder="{}"
+              spellCheck={false}
+            />
+            {bodyError && <p className="field-error">{bodyError}</p>}
+            <label>postProcessJq</label>
+            <p className="hint">
+              A jq filter (not JSON) run against the fetched response. Usually return a
+              single object, for example{" "}
+              <code>{`{priceUsdCents: ((.bitcoin.usd * 100) | tostring | split(".")[0] | tonumber)}`}</code>{" "}
+              or <code>{`{name: .name, numberOfFilms: (.films | length)}`}</code>.
+              FDC&apos;s jq subset has no <code>floor</code>/<code>ceil</code>/<code>round</code>.
+            </p>
+            <textarea
+              className={jqError ? "invalid" : undefined}
               value={req.postProcessJq}
               onChange={(e) => setField("postProcessJq", e.target.value)}
+              aria-invalid={!!jqError}
+              spellCheck={false}
             />
+            {jqError && <p className="field-error">{jqError}</p>}
             <label>abiSignature</label>
+            <p className="hint">
+              JSON-encoded Solidity ABI tuple for the object returned by{" "}
+              <code>postProcessJq</code>. Must be{" "}
+              <code>{`{"components":[{"name":"…","type":"uint256"}],"name":"task","type":"tuple"}`}</code>{" "}
+              — field names and types must match the jq object.
+            </p>
             <textarea
+              className={abiError ? "invalid" : undefined}
               value={req.abiSignature}
               onChange={(e) => setField("abiSignature", e.target.value)}
+              aria-invalid={!!abiError}
+              spellCheck={false}
             />
+            {abiError && <p className="field-error">{abiError}</p>}
           </div>
         )}
       </section>
@@ -439,7 +671,11 @@ export default function Home() {
             title="Prepare"
             desc="Encode the request at Flare's verifier and read the on-chain fee."
           >
-            <button className="btn" onClick={prepare} disabled={busy !== null}>
+            <button
+              className="btn"
+              onClick={prepare}
+              disabled={busy !== null || requestInvalid}
+            >
               {busy === "prepare" && <span className="spin" />} Prepare request
             </button>
             {fee !== null && (

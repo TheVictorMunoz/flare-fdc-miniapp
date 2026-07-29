@@ -22,7 +22,7 @@ export interface Recipe {
   emoji: string;
   title: string;
   subtitle: string;
-  category: "Markets" | "Dev" | "World" | "Fun";
+  category: "Markets" | "Dev" | "World" | "Fun" | "Custom";
   sourceName: string;
   request: Web2Request;
   /** Turn the decoded attested fields into a big human headline for the card. */
@@ -45,6 +45,34 @@ function num(v: string | undefined): number {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
 }
+
+/** Blank Web2Json starter — fill in URL + jq path for your public JSON API. */
+export const CUSTOM_REQUEST: Web2Request = {
+  url: "",
+  httpMethod: "GET",
+  headers: "{}",
+  queryParams: "{}",
+  body: "{}",
+  postProcessJq: "{value: .someField}",
+  abiSignature: tuple([{ name: "value", type: "string" }]),
+};
+
+export const CUSTOM_RECIPE: Recipe = {
+  id: "custom",
+  emoji: "✦",
+  title: "Your own API",
+  subtitle: "Attest any public JSON endpoint",
+  category: "Custom",
+  sourceName: "your API",
+  request: CUSTOM_REQUEST,
+  headline: (f) => {
+    const keys = Object.keys(f);
+    if (keys.length) {
+      return { value: String(f[keys[0]]), label: keys[0] };
+    }
+    return { value: "Verified", label: "attested value" };
+  },
+};
 
 export const RECIPES: Recipe[] = [
   {
@@ -193,7 +221,9 @@ export const RECIPES: Recipe[] = [
 ];
 
 export function recipeById(id: string | null | undefined): Recipe | undefined {
-  return id ? RECIPES.find((r) => r.id === id) : undefined;
+  if (!id) return undefined;
+  if (id === CUSTOM_RECIPE.id) return CUSTOM_RECIPE;
+  return RECIPES.find((r) => r.id === id);
 }
 
 /** Format a headline for a known recipe, or a graceful fallback for custom requests. */
