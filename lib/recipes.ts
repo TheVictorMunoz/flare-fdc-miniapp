@@ -5,6 +5,15 @@
 // (no API key needed by the source), plus display metadata so the UI can show
 // a human headline instead of a raw struct. Selecting a recipe fills the
 // request editor; you can still tweak any field ("Advanced") before proving.
+//
+// IMPORTANT — verified against the live Coston2 Web2Json verifier:
+//   * The verifier's jq engine does NOT support `floor`/`round`, and raw
+//     floats fail ABI encoding. So numeric values are attested as STRINGS
+//     (or `tostring`'d) and formatted for display here; naturally-integer
+//     values may use uint256 directly.
+//   * The verifier can reach coinbase.com, open-meteo.com, npmjs.org and
+//     swapi.info, but NOT frankfurter.app or api.github.com ("FETCH ERROR").
+// Every recipe below has been confirmed to pass `prepareRequest` live.
 // ---------------------------------------------------------------------------
 
 export interface Web2Request {
@@ -41,9 +50,13 @@ function tuple(components: Array<{ name: string; type: string }>): string {
   });
 }
 
-function num(v: string | undefined): number {
+function money(v: string | undefined, currency = "$"): string {
   const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
+  if (!Number.isFinite(n)) return String(v ?? "—");
+  return `${currency}${n.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }
 
 /** Blank Web2Json starter — fill in URL + jq path for your public JSON API. */
@@ -81,24 +94,17 @@ export const RECIPES: Recipe[] = [
     title: "Bitcoin price",
     subtitle: "Live BTC/USD spot, attested on-chain",
     category: "Markets",
-    sourceName: "CoinGecko",
+    sourceName: "Coinbase",
     request: {
-      url: "https://api.coingecko.com/api/v3/simple/price",
+      url: "https://api.coinbase.com/v2/prices/BTC-USD/spot",
       httpMethod: "GET",
       headers: "{}",
-      queryParams: '{"ids":"bitcoin","vs_currencies":"usd"}',
+      queryParams: "{}",
       body: "{}",
-      // FDC's jq subset has no `floor` — truncate via tostring/split/tonumber.
-      postProcessJq:
-        '{priceUsdCents: ((.bitcoin.usd * 100) | tostring | split(".")[0] | tonumber)}',
-      abiSignature: tuple([{ name: "priceUsdCents", type: "uint256" }]),
+      postProcessJq: "{price: .data.amount}",
+      abiSignature: tuple([{ name: "price", type: "string" }]),
     },
-    headline: (f) => ({
-      value: `$${(num(f.priceUsdCents) / 100).toLocaleString(undefined, {
-        maximumFractionDigits: 2,
-      })}`,
-      label: "1 BTC in USD",
-    }),
+    headline: (f) => ({ value: money(f.price), label: "1 BTC in USD" }),
   },
   {
     id: "eth",
@@ -106,23 +112,17 @@ export const RECIPES: Recipe[] = [
     title: "Ethereum price",
     subtitle: "Live ETH/USD spot, attested on-chain",
     category: "Markets",
-    sourceName: "CoinGecko",
+    sourceName: "Coinbase",
     request: {
-      url: "https://api.coingecko.com/api/v3/simple/price",
+      url: "https://api.coinbase.com/v2/prices/ETH-USD/spot",
       httpMethod: "GET",
       headers: "{}",
-      queryParams: '{"ids":"ethereum","vs_currencies":"usd"}',
+      queryParams: "{}",
       body: "{}",
-      postProcessJq:
-        '{priceUsdCents: ((.ethereum.usd * 100) | tostring | split(".")[0] | tonumber)}',
-      abiSignature: tuple([{ name: "priceUsdCents", type: "uint256" }]),
+      postProcessJq: "{price: .data.amount}",
+      abiSignature: tuple([{ name: "price", type: "string" }]),
     },
-    headline: (f) => ({
-      value: `$${(num(f.priceUsdCents) / 100).toLocaleString(undefined, {
-        maximumFractionDigits: 2,
-      })}`,
-      label: "1 ETH in USD",
-    }),
+    headline: (f) => ({ value: money(f.price), label: "1 ETH in USD" }),
   },
   {
     id: "fx",
@@ -130,21 +130,23 @@ export const RECIPES: Recipe[] = [
     title: "USD → EUR rate",
     subtitle: "Reference FX rate, attested on-chain",
     category: "Markets",
-    sourceName: "Frankfurter (ECB)",
+    sourceName: "Coinbase",
     request: {
-      url: "https://api.frankfurter.dev/v1/latest",
+      url: "https://api.coinbase.com/v2/exchange-rates",
       httpMethod: "GET",
       headers: "{}",
-      queryParams: '{"base":"USD","symbols":"EUR"}',
+      queryParams: '{"currency":"USD"}',
       body: "{}",
-      postProcessJq:
-        '{eurPerUsd1e6: ((.rates.EUR * 1000000) | tostring | split(".")[0] | tonumber)}',
-      abiSignature: tuple([{ name: "eurPerUsd1e6", type: "uint256" }]),
+      postProcessJq: "{eur: .data.rates.EUR}",
+      abiSignature: tuple([{ name: "eur", type: "string" }]),
     },
-    headline: (f) => ({
-      value: `€${(num(f.eurPerUsd1e6) / 1e6).toFixed(4)}`,
-      label: "1 USD in EUR",
-    }),
+    headline: (f) => {
+      const n = Number(f.eur);
+      return {
+        value: Number.isFinite(n) ? `€${n.toFixed(4)}` : String(f.eur ?? "—"),
+        label: "1 USD in EUR",
+      };
+    },
   },
   {
     id: "weather",
@@ -160,12 +162,11 @@ export const RECIPES: Recipe[] = [
       queryParams:
         '{"latitude":"52.52","longitude":"13.41","current":"temperature_2m"}',
       body: "{}",
-      postProcessJq:
-        '{tempCentiC: ((.current.temperature_2m * 100) | tostring | split(".")[0] | tonumber)}',
-      abiSignature: tuple([{ name: "tempCentiC", type: "int256" }]),
+      postProcessJq: "{tempC: (.current.temperature_2m | tostring)}",
+      abiSignature: tuple([{ name: "tempC", type: "string" }]),
     },
     headline: (f) => ({
-      value: `${(num(f.tempCentiC) / 100).toFixed(1)}°C`,
+      value: `${f.tempC ?? "—"}°C`,
       label: "Berlin, right now",
     }),
   },
@@ -185,10 +186,13 @@ export const RECIPES: Recipe[] = [
       postProcessJq: "{weeklyDownloads: .downloads}",
       abiSignature: tuple([{ name: "weeklyDownloads", type: "uint256" }]),
     },
-    headline: (f) => ({
-      value: num(f.weeklyDownloads).toLocaleString(),
-      label: "downloads of next / week",
-    }),
+    headline: (f) => {
+      const n = Number(f.weeklyDownloads);
+      return {
+        value: Number.isFinite(n) ? n.toLocaleString() : String(f.weeklyDownloads ?? "—"),
+        label: "downloads of next / week",
+      };
+    },
   },
   {
     id: "swapi",
@@ -215,7 +219,7 @@ export const RECIPES: Recipe[] = [
     },
     headline: (f) => ({
       value: String(f.name || "—"),
-      label: `appears in ${num(f.numberOfFilms)} films`,
+      label: `appears in ${Number(f.numberOfFilms) || 0} films`,
     }),
   },
 ];

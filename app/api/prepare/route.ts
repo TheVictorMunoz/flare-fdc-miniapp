@@ -21,8 +21,11 @@ export async function POST(req: NextRequest) {
 
   if (!apiKey) {
     return NextResponse.json(
-      { error: "VERIFIER_API_KEY_TESTNET is not set on the server." },
-      { status: 500 }
+      {
+        error:
+          "Creating new proofs isn't available on this deployment right now. You can still open and re-verify any shared proof link.",
+      },
+      { status: 503 }
     );
   }
 
