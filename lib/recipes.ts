@@ -60,7 +60,9 @@ export const RECIPES: Recipe[] = [
       headers: "{}",
       queryParams: '{"ids":"bitcoin","vs_currencies":"usd"}',
       body: "{}",
-      postProcessJq: "{priceUsdCents: (.bitcoin.usd * 100 | floor)}",
+      // FDC's jq subset has no `floor` — truncate via tostring/split/tonumber.
+      postProcessJq:
+        '{priceUsdCents: ((.bitcoin.usd * 100) | tostring | split(".")[0] | tonumber)}',
       abiSignature: tuple([{ name: "priceUsdCents", type: "uint256" }]),
     },
     headline: (f) => ({
@@ -83,7 +85,8 @@ export const RECIPES: Recipe[] = [
       headers: "{}",
       queryParams: '{"ids":"ethereum","vs_currencies":"usd"}',
       body: "{}",
-      postProcessJq: "{priceUsdCents: (.ethereum.usd * 100 | floor)}",
+      postProcessJq:
+        '{priceUsdCents: ((.ethereum.usd * 100) | tostring | split(".")[0] | tonumber)}',
       abiSignature: tuple([{ name: "priceUsdCents", type: "uint256" }]),
     },
     headline: (f) => ({
@@ -101,12 +104,13 @@ export const RECIPES: Recipe[] = [
     category: "Markets",
     sourceName: "Frankfurter (ECB)",
     request: {
-      url: "https://api.frankfurter.app/latest",
+      url: "https://api.frankfurter.dev/v1/latest",
       httpMethod: "GET",
       headers: "{}",
-      queryParams: '{"from":"USD","to":"EUR"}',
+      queryParams: '{"base":"USD","symbols":"EUR"}',
       body: "{}",
-      postProcessJq: "{eurPerUsd1e6: (.rates.EUR * 1000000 | floor)}",
+      postProcessJq:
+        '{eurPerUsd1e6: ((.rates.EUR * 1000000) | tostring | split(".")[0] | tonumber)}',
       abiSignature: tuple([{ name: "eurPerUsd1e6", type: "uint256" }]),
     },
     headline: (f) => ({
@@ -128,7 +132,8 @@ export const RECIPES: Recipe[] = [
       queryParams:
         '{"latitude":"52.52","longitude":"13.41","current":"temperature_2m"}',
       body: "{}",
-      postProcessJq: "{tempCentiC: (.current.temperature_2m * 100 | floor)}",
+      postProcessJq:
+        '{tempCentiC: ((.current.temperature_2m * 100) | tostring | split(".")[0] | tonumber)}',
       abiSignature: tuple([{ name: "tempCentiC", type: "int256" }]),
     },
     headline: (f) => ({
