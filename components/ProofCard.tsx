@@ -1,5 +1,6 @@
 "use client";
 
+import { votingRoundExplorerUrl } from "@/lib/flare";
 import { formatHeadline, recipeById } from "@/lib/recipes";
 
 export interface ProofCardProps {
@@ -37,7 +38,8 @@ export default function ProofCard({
   const recipe = recipeById(recipeId);
   const head = formatHeadline(recipeId, attested);
   const emoji = recipe?.emoji ?? "✦";
-  const title = recipe?.title ?? "Custom attestation";
+  const isCustom = !recipe || recipe.id === "custom";
+  const title = isCustom ? "Custom attestation" : recipe.title;
 
   const state = verifying
     ? "verifying"
@@ -83,20 +85,33 @@ export default function ProofCard({
         </div>
       </div>
 
-      <div className="pc-headline">
-        <div className="pc-value">{head.value}</div>
-        <div className="pc-label">{head.label}</div>
-      </div>
-
-      {fields.length > 1 && (
-        <div className="pc-fields">
+      {isCustom && fields.length > 0 ? (
+        <div className="pc-fields pc-fields-all">
           {fields.map(([k, v]) => (
-            <div className="pc-chip" key={k}>
-              <span className="pc-chip-k">{k}</span>
-              <span className="pc-chip-v">{String(v)}</span>
+            <div className="pc-field" key={k}>
+              <span className="pc-field-k">{k}</span>
+              <span className="pc-field-v">{String(v)}</span>
             </div>
           ))}
         </div>
+      ) : (
+        <>
+          <div className="pc-headline">
+            <div className="pc-value">{head.value}</div>
+            <div className="pc-label">{head.label}</div>
+          </div>
+
+          {fields.length > 1 && (
+            <div className="pc-fields">
+              {fields.map(([k, v]) => (
+                <div className="pc-chip" key={k}>
+                  <span className="pc-chip-k">{k}</span>
+                  <span className="pc-chip-v">{String(v)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
 
       <div className="pc-meta">
@@ -107,7 +122,13 @@ export default function ProofCard({
         {votingRoundId !== null && votingRoundId !== undefined && (
           <div className="pc-meta-row">
             <span>Voting round</span>
-            <b>#{votingRoundId}</b>
+            <a
+              href={votingRoundExplorerUrl(votingRoundId)}
+              target="_blank"
+              rel="noreferrer"
+            >
+              #{votingRoundId}
+            </a>
           </div>
         )}
         {txHash && (

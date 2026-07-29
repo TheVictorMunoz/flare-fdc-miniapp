@@ -38,7 +38,14 @@ export async function POST(req: NextRequest) {
       args: [proofArg as any],
     })) as boolean;
     const attested = decodeAttestedData(proofArg.data);
-    return NextResponse.json({ valid, attested });
+    return NextResponse.json({
+      valid,
+      attested,
+      verification,
+      calls: [
+        `eth_call FdcVerification(${verification}).verifyWeb2Json → ${valid}`,
+      ],
+    });
   } catch (e: any) {
     return NextResponse.json(
       { error: e?.message ?? "On-chain verification call failed." },

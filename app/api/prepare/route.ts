@@ -108,5 +108,5 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  return NextResponse.json({ abiEncodedRequest, requestBody });
+  return NextResponse.json({ abiEncodedRequest, requestBody, verifierUrl: url });
 }

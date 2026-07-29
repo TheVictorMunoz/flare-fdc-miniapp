@@ -22,6 +22,14 @@ export const coston2 = defineChain({
 
 export const COSTON2_CHAIN_ID_HEX = "0x72"; // 114
 
+/** Coston2 Systems Explorer — FDC / FSP voting rounds, finalizations, providers. */
+export const COSTON2_SYSTEMS_EXPLORER =
+  "https://coston2-systems-explorer.flare.network";
+
+export function votingRoundExplorerUrl(votingRoundId: number): string {
+  return `${COSTON2_SYSTEMS_EXPLORER}/voting-round/${votingRoundId}`;
+}
+
 /**
  * The FlareContractRegistry is deployed at the same address on every Flare
  * network. All protocol contracts (FdcHub, FdcVerification, fee config, ...)
