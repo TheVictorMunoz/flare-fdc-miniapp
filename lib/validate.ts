@@ -74,6 +74,43 @@ export function validateJsonField(label: string, value: string): string | null {
   }
 }
 
+/** FDC Web2Json verifier rejects >15 header entries (`INVALID: INVALID HEADERS`). */
+const MAX_WEB2JSON_HEADERS = 15;
+
+/**
+ * Headers must be a JSON object of string→string (or string→number/bool coerced
+ * by the verifier). Cap entry count to the verifier limit.
+ */
+export function validateHeaders(value: string): string | null {
+  const jsonErr = validateJsonField("Headers", value);
+  if (jsonErr) return jsonErr;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value.trim());
+  } catch {
+    return "Headers must be valid JSON.";
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return 'Headers must be a JSON object, e.g. {"Accept":"application/json"}.';
+  }
+
+  const entries = Object.entries(parsed as Record<string, unknown>);
+  for (const [k, v] of entries) {
+    if (!k.trim()) return "Header names must be non-empty.";
+    if (v !== null && typeof v === "object") {
+      return `Header "${k}" must be a string (or number/boolean), not an object.`;
+    }
+  }
+
+  if (entries.length > MAX_WEB2JSON_HEADERS) {
+    return `Too many headers (${entries.length}). The FDC verifier allows at most ${MAX_WEB2JSON_HEADERS} — remove browser chrome (sec-*, origin, referer, user-agent) and keep only what the API needs.`;
+  }
+
+  return null;
+}
+
 /**
  * abiSignature is a JSON-encoded Solidity ABI tuple component — the schema
  * for the object returned by postProcessJq. Shape:

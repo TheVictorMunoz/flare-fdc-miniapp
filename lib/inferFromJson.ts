@@ -19,6 +19,25 @@ interface Field {
 const MAX_FIELDS = 8;
 const MAX_DEPTH = 4;
 
+/**
+ * Keys that are usually request-echo / transport metadata. Their values differ
+ * between our probe client and the FDC verifier's fetch, so inferring fields
+ * from them causes `INVALID: ABI ENCODING ERROR` at prepare time.
+ */
+const SKIP_OBJECT_KEYS = new Set([
+  "headers",
+  "header",
+  "files",
+  "file",
+  "form",
+  "args",
+  "cookies",
+  "cookie",
+]);
+
+/** Prefer these object keys first when walking a response (POST echo APIs). */
+const PREFERRED_OBJECT_KEYS = ["json", "data", "result", "results", "payload"];
+
 function tuple(components: Array<{ name: string; type: string }>): string {
   return JSON.stringify({
     components: components.map((c) => ({
@@ -113,8 +132,15 @@ function collectFields(
   if (typeof value === "object") {
     const obj = value as Record<string, unknown>;
     const keys = Object.keys(obj);
-    for (const key of keys) {
+    // Prefer body-ish keys first so POST echoes (postman-echo, httpbin, …)
+    // yield stable fields like .json.hello instead of .headers.*.
+    const ordered = [
+      ...PREFERRED_OBJECT_KEYS.filter((k) => k in obj),
+      ...keys.filter((k) => !PREFERRED_OBJECT_KEYS.includes(k)),
+    ];
+    for (const key of ordered) {
       if (out.length >= MAX_FIELDS) break;
+      if (SKIP_OBJECT_KEYS.has(key.toLowerCase())) continue;
       collectFields(obj[key], [...path, key], out, used);
     }
     return;

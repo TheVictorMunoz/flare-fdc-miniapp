@@ -1,6 +1,10 @@
 /**
  * Parse a browser/DevTools-style `curl` command into Web2Json request fields.
  * Query params are split out of the URL so `validateUrl` accepts the result.
+ *
+ * Browser-copied curls often include 15+ chrome headers (sec-*, origin, …).
+ * The FDC Web2Json verifier rejects more than {@link MAX_WEB2JSON_HEADERS}
+ * entries with `INVALID: INVALID HEADERS`, so we strip noise on import.
  */
 
 export interface ParsedCurl {
@@ -9,6 +13,80 @@ export interface ParsedCurl {
   headers: string;
   queryParams: string;
   body: string;
+}
+
+/** Hard limit enforced by the FDC Web2Json verifier. */
+export const MAX_WEB2JSON_HEADERS = 15;
+
+/**
+ * Hop-by-hop / browser-fingerprint headers that DevTools includes in "Copy as
+ * cURL" but that APIs (and FDC data providers) do not need. Matching is
+ * case-insensitive; anything starting with `sec-` or `proxy-` is also dropped.
+ */
+const BROWSER_NOISE_HEADERS = new Set([
+  "accept-encoding",
+  "accept-language",
+  "cache-control",
+  "connection",
+  "content-length",
+  "cookie",
+  "cookie2",
+  "dnt",
+  "expires",
+  "host",
+  "keep-alive",
+  "origin",
+  "pragma",
+  "priority",
+  "referer",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+  "upgrade-insecure-requests",
+  "user-agent",
+  "via",
+]);
+
+function isNoiseHeader(name: string): boolean {
+  const lower = name.toLowerCase();
+  if (BROWSER_NOISE_HEADERS.has(lower)) return true;
+  if (lower.startsWith("sec-") || lower.startsWith("proxy-")) return true;
+  return false;
+}
+
+/**
+ * Drop browser noise headers and enforce the verifier's entry cap.
+ * Prefer keeping Authorization / Content-Type / Accept / custom `x-*` headers
+ * when trimming is required.
+ */
+export function sanitizeWeb2Headers(
+  headers: Record<string, string>
+): Record<string, string> {
+  const kept: Array<[string, string]> = [];
+  for (const [name, value] of Object.entries(headers)) {
+    if (!name.trim() || isNoiseHeader(name)) continue;
+    // Empty values (Chrome copies unset headers as `Name;`) are useless and
+    // can confuse some upstream clients — drop them.
+    if (String(value).trim() === "") continue;
+    kept.push([name, value]);
+  }
+
+  if (kept.length <= MAX_WEB2JSON_HEADERS) {
+    return Object.fromEntries(kept);
+  }
+
+  const priority = (name: string): number => {
+    const lower = name.toLowerCase();
+    if (lower === "authorization") return 0;
+    if (lower === "content-type") return 1;
+    if (lower === "accept") return 2;
+    if (lower.startsWith("x-")) return 3;
+    return 4;
+  };
+
+  kept.sort((a, b) => priority(a[0]) - priority(b[0]));
+  return Object.fromEntries(kept.slice(0, MAX_WEB2JSON_HEADERS));
 }
 
 const ALLOWED_METHODS = new Set([
@@ -164,11 +242,18 @@ function looksLikeUrl(s: string): boolean {
 
 function parseHeader(raw: string): { name: string; value: string } | null {
   const idx = raw.indexOf(":");
-  if (idx <= 0) return null;
-  const name = raw.slice(0, idx).trim();
-  const value = raw.slice(idx + 1).trim();
-  if (!name) return null;
-  return { name, value };
+  if (idx > 0) {
+    const name = raw.slice(0, idx).trim();
+    const value = raw.slice(idx + 1).trim();
+    if (!name) return null;
+    return { name, value };
+  }
+  // Chrome DevTools copies empty headers as `Name;` (semicolon, no value).
+  if (raw.endsWith(";")) {
+    const name = raw.slice(0, -1).trim();
+    if (name && !/[\s:]/.test(name)) return { name, value: "" };
+  }
+  return null;
 }
 
 function parseBody(raw: string): string {
@@ -428,7 +513,7 @@ export function parseCurl(input: string): ParsedCurl {
   return {
     url: cleanUrl,
     httpMethod,
-    headers: JSON.stringify(headers),
+    headers: JSON.stringify(sanitizeWeb2Headers(headers)),
     queryParams: mergeQuery(queryFromUrl, queryFromData),
     body,
   };

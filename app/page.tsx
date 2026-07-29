@@ -24,6 +24,7 @@ import {
 } from "@/lib/recipes";
 import {
   validateAbiSignature,
+  validateHeaders,
   validateJsonField,
   validatePostProcessJq,
   validateUrl,
@@ -77,7 +78,7 @@ export default function Home() {
   const showEditor = showAdvanced || isCustom;
   const urlError = useMemo(() => validateUrl(req.url), [req.url]);
   const headersError = useMemo(
-    () => validateJsonField("Headers", req.headers),
+    () => validateHeaders(req.headers),
     [req.headers]
   );
   const queryError = useMemo(
@@ -253,7 +254,7 @@ export default function Home() {
   const prepare = useCallback(async () => {
     setError(null);
     const urlErr = validateUrl(req.url);
-    const headersErr = validateJsonField("Headers", req.headers);
+    const headersErr = validateHeaders(req.headers);
     const queryErr = validateJsonField("Query params", req.queryParams);
     const bodyErr = validateJsonField("Body", req.body);
     const jqErr = validatePostProcessJq(req.postProcessJq);
