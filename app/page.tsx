@@ -10,7 +10,9 @@ import {
 import {
   coston2,
   COSTON2_CHAIN_ID_HEX,
+  CONTRACT_REGISTRY_ADDRESS,
   fdcHubAbi,
+  votingRoundExplorerUrl,
   votingRoundIdFromTimestamp,
 } from "@/lib/flare";
 import {
@@ -273,6 +275,7 @@ export default function Home() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "prepare failed");
+      if (json.verifierUrl) addLog(`POST ${json.verifierUrl}`);
       setAbiEncodedRequest(json.abiEncodedRequest);
       addLog(`abiEncodedRequest ready (${json.abiEncodedRequest.length} chars)`);
 
@@ -291,7 +294,8 @@ export default function Home() {
       if (!cfgRes.ok) throw new Error(cfgJson.error ?? "config read failed");
       setFee(feeJson.fee);
       setFdcHub(cfgJson.fdcHub);
-      addLog(`Fee: ${feeJson.fee} wei · FdcHub: ${cfgJson.fdcHub}`);
+      for (const c of cfgJson.calls ?? []) addLog(c);
+      for (const c of feeJson.calls ?? []) addLog(c);
     } catch (e: any) {
       setError(e?.message ?? "prepare failed");
     } finally {
@@ -351,7 +355,7 @@ export default function Home() {
         transport: custom(window.ethereum),
       });
 
-      addLog("Submitting requestAttestation to FdcHub…");
+      addLog(`eth_sendTransaction FdcHub.requestAttestation{value: ${fee} wei}`);
       const hash = await wallet.writeContract({
         address: fdcHub,
         abi: fdcHubAbi,
@@ -360,14 +364,16 @@ export default function Home() {
         value: BigInt(fee),
       });
       setTxHash(hash);
-      addLog(`Tx sent: ${hash}`);
+      addLog(`tx → ${hash}`);
 
       const receipt = await pub.waitForTransactionReceipt({ hash });
       const block = await pub.getBlock({ blockNumber: receipt.blockNumber });
       const round = votingRoundIdFromTimestamp(Number(block.timestamp));
       setVotingRoundId(round);
       setAutoRun(true); // hand off to auto proof + verify
-      addLog(`Included in block ${receipt.blockNumber} · voting round ${round}`);
+      addLog(
+        `eth_getBlockByNumber ${receipt.blockNumber} → timestamp ${block.timestamp} · voting round ${round}`
+      );
     } catch (e: any) {
       setError(e?.shortMessage ?? e?.message ?? "submit failed");
     } finally {
@@ -382,7 +388,7 @@ export default function Home() {
     setBusy("verify");
     setValid(null);
     try {
-      addLog("Calling FdcVerification.verifyWeb2Json on-chain…");
+      addLog("Verifying proof on-chain…");
       const res = await fetch("/api/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -392,7 +398,7 @@ export default function Home() {
       if (!res.ok) throw new Error(json.error ?? "verify failed");
       setValid(json.valid);
       setAutoRun(false);
-      addLog(`On-chain verification returned: ${json.valid}`);
+      for (const c of json.calls ?? []) addLog(c);
       if (json.attested) setDecoded(json.attested);
     } catch (e: any) {
       setAutoRun(false);
@@ -679,7 +685,24 @@ export default function Home() {
               {busy === "prepare" && <span className="spin" />} Prepare request
             </button>
             {fee !== null && (
-              <div className="mini ok">Fee {fee} wei · FdcHub resolved from registry</div>
+              <div className="mini ok">
+                Fee {fee} wei ·{" "}
+                {fdcHub ? (
+                  <a href={`${explorerBase}/address/${fdcHub}`} target="_blank" rel="noreferrer">
+                    FdcHub
+                  </a>
+                ) : (
+                  "FdcHub"
+                )}{" "}
+                resolved from{" "}
+                <a
+                  href={`${explorerBase}/address/${CONTRACT_REGISTRY_ADDRESS}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  FlareContractRegistry
+                </a>
+              </div>
             )}
           </Step>
 
@@ -687,7 +710,19 @@ export default function Home() {
             n={2}
             state={s2}
             title="Submit"
-            desc="Your wallet calls FdcHub.requestAttestation. Then it runs itself."
+            desc={
+              <>
+                Your wallet calls{" "}
+                <a
+                  href="https://dev.flare.network/fdc/reference/IFdcHub#requestattestation"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  FdcHub.requestAttestation
+                </a>
+                . Then it runs itself.
+              </>
+            }
           >
             <button
               className="btn"
@@ -699,7 +734,19 @@ export default function Home() {
             </button>
             {txHash && (
               <div className="mini ok">
-                Submitted · round #{votingRoundId} ·{" "}
+                Submitted ·{" "}
+                {votingRoundId !== null ? (
+                  <a
+                    href={votingRoundExplorerUrl(votingRoundId)}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    round #{votingRoundId}
+                  </a>
+                ) : (
+                  "round pending"
+                )}{" "}
+                ·{" "}
                 <a href={`${explorerBase}/tx/${txHash}`} target="_blank" rel="noreferrer">
                   view tx
                 </a>
@@ -716,8 +763,18 @@ export default function Home() {
             <button className="btn ghost" onClick={fetchProof} disabled={busy !== null || votingRoundId === null}>
               {busy === "proof" && <span className="spin" />} Fetch proof
             </button>
-            {busy === "proof" && (
-              <div className="mini">Waiting for round finalization…</div>
+            {busy === "proof" && votingRoundId !== null && (
+              <div className="mini">
+                Waiting for{" "}
+                <a
+                  href={votingRoundExplorerUrl(votingRoundId)}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  round #{votingRoundId}
+                </a>{" "}
+                finalization…
+              </div>
             )}
           </Step>
 
@@ -725,7 +782,18 @@ export default function Home() {
             n={4}
             state={s4}
             title="Verify on-chain"
-            desc="FdcVerification.verifyWeb2Json checks the proof against the root the validators committed."
+            desc={
+              <>
+                <a
+                  href="https://dev.flare.network/fdc/reference/IFdcVerification#verifyweb2json"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  FdcVerification.verifyWeb2Json
+                </a>{" "}
+                checks the proof against the root the validators committed.
+              </>
+            }
             last
           >
             <button className="btn ghost" onClick={verify} disabled={busy !== null || !proof}>
@@ -787,7 +855,11 @@ export default function Home() {
         )}
         <div className="dev-label">Activity log</div>
         <div className="log" ref={logRef}>
-          {log.length === 0 ? <div>— activity log —</div> : log.map((l, i) => <div key={i}>{l}</div>)}
+          {log.length === 0 ? (
+            <div>— activity log —</div>
+          ) : (
+            log.map((l, i) => <div key={i}>{linkRoundsInLog(l)}</div>)
+          )}
         </div>
       </details>
 
@@ -806,6 +878,26 @@ export default function Home() {
   );
 }
 
+function linkRoundsInLog(msg: string): React.ReactNode {
+  const parts = msg.split(/(round \d+)/g);
+  if (parts.length === 1) return msg;
+  return parts.map((part, i) => {
+    const m = /^round (\d+)$/.exec(part);
+    if (!m) return part;
+    const id = Number(m[1]);
+    return (
+      <a
+        key={i}
+        href={votingRoundExplorerUrl(id)}
+        target="_blank"
+        rel="noreferrer"
+      >
+        {part}
+      </a>
+    );
+  });
+}
+
 function Step({
   n,
   state,
@@ -817,7 +909,7 @@ function Step({
   n: number;
   state: string;
   title: string;
-  desc: string;
+  desc: React.ReactNode;
   children: React.ReactNode;
   last?: boolean;
 }) {

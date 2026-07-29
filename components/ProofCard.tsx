@@ -1,5 +1,6 @@
 "use client";
 
+import { votingRoundExplorerUrl } from "@/lib/flare";
 import { formatHeadline, recipeById } from "@/lib/recipes";
 
 export interface ProofCardProps {
@@ -121,7 +122,13 @@ export default function ProofCard({
         {votingRoundId !== null && votingRoundId !== undefined && (
           <div className="pc-meta-row">
             <span>Voting round</span>
-            <b>#{votingRoundId}</b>
+            <a
+              href={votingRoundExplorerUrl(votingRoundId)}
+              target="_blank"
+              rel="noreferrer"
+            >
+              #{votingRoundId}
+            </a>
           </div>
         )}
         {txHash && (

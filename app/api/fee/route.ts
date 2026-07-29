@@ -31,7 +31,14 @@ export async function POST(req: NextRequest) {
       functionName: "getRequestFee",
       args: [abiEncodedRequest as `0x${string}`],
     })) as bigint;
-    return NextResponse.json({ fee: fee.toString() });
+    const feeWei = fee.toString();
+    return NextResponse.json({
+      fee: feeWei,
+      feeConfig,
+      calls: [
+        `eth_call FdcRequestFeeConfigurations(${feeConfig}).getRequestFee → ${feeWei} wei`,
+      ],
+    });
   } catch (e: any) {
     return NextResponse.json(
       { error: e?.message ?? "Failed to read fee." },

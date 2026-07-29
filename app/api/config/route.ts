@@ -16,6 +16,11 @@ export async function GET() {
       fdcHub,
       fdcRequestFeeConfigurations,
       fdcVerification,
+      calls: [
+        `eth_call FlareContractRegistry.getContractAddressByName("FdcHub") → ${fdcHub}`,
+        `eth_call FlareContractRegistry.getContractAddressByName("FdcRequestFeeConfigurations") → ${fdcRequestFeeConfigurations}`,
+        `eth_call FlareContractRegistry.getContractAddressByName("FdcVerification") → ${fdcVerification}`,
+      ],
     });
   } catch (e: any) {
     return NextResponse.json(
