@@ -96,7 +96,10 @@ export async function POST(req: NextRequest) {
 
   if (json.status && json.status !== "VALID") {
     return NextResponse.json(
-      { error: `Verifier status: ${json.status}`, details: json },
+      {
+        error: explainVerifierStatus(String(json.status), requestBody.url),
+        details: json,
+      },
       { status: 400 }
     );
   }
@@ -109,4 +112,35 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json({ abiEncodedRequest, requestBody, verifierUrl: url });
+}
+
+/** Map opaque verifier status codes to actionable user-facing copy. */
+function explainVerifierStatus(status: string, url: string): string {
+  const host = (() => {
+    try {
+      return new URL(url).host;
+    } catch {
+      return url || "this URL";
+    }
+  })();
+
+  if (/INVALID:\s*FETCH ERROR/i.test(status)) {
+    return (
+      `The FDC verifier could not fetch ${host}. ` +
+      `That host is unreachable from Flare's PublicWeb2 network (Cloudflare, geo blocks, auth walls, or private APIs are common causes). ` +
+      `Your laptop may still reach it — probe success does not mean the verifier can. ` +
+      `Use a publicly reachable JSON API (e.g. the built-in recipes).`
+    );
+  }
+  if (/INVALID:\s*INVALID HEADERS/i.test(status)) {
+    return (
+      `The FDC verifier rejected the headers (max 15 entries; drop browser chrome like sec-*, origin, referer, user-agent).`
+    );
+  }
+  if (/INVALID:\s*ABI ENCODING ERROR/i.test(status)) {
+    return (
+      `The FDC verifier could not ABI-encode the jq result — check that postProcessJq returns fields matching abiSignature (types and names).`
+    );
+  }
+  return `Verifier status: ${status}`;
 }
